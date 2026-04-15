@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>庫存查詢系統</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', '微軟正黑體', sans-serif; background: #f0f4f8; color: #1a202c; min-height: 100dvh; }
+
+    header { background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 14px 16px; text-align: center; box-shadow: 0 2px 8px rgba(37,99,235,0.3); position: sticky; top: 0; z-index: 10; }
+    header h1 { font-size: clamp(1rem, 4vw, 1.25rem); font-weight: 700; }
+    header p  { font-size: clamp(0.7rem, 3vw, 0.8rem); opacity: 0.85; margin-top: 2px; }
+
+    main { width: 100%; max-width: 520px; margin: 0 auto; padding: 12px; }
+
+    #loading-overlay {
+      position: fixed; inset: 0; background: rgba(255,255,255,0.95);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; z-index: 999; font-size: 0.95rem; color: #4b5563;
+    }
+    #loading-overlay .big-spinner {
+      width: 44px; height: 44px; border: 4px solid #e5e7eb; border-top-color: #2563eb;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+
+    .card { background: white; border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); }
+    .card-title { font-size: 0.8rem; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+
+    label { display: block; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; color: #374151; }
+    select, input[type="text"] { width: 100%; padding: 12px 14px; border: 2px solid #e5e7eb; border-radius: 10px; font-size: 1rem; color: #1a202c; background: #f9fafb; transition: border-color 0.2s; appearance: none; -webkit-appearance: none; }
+    select:focus, input[type="text"]:focus { outline: none; border-color: #2563eb; background: white; }
+    .select-wrapper { position: relative; }
+    .select-wrapper::after { content: '▼'; position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 0.7rem; color: #9ca3af; pointer-events: none; }
+
+    /* 掃碼器按鈕 */
+    .btn-scan {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; padding: 16px; background: #2563eb; color: white; border: none;
+      border-radius: 12px; font-size: 1.05rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s, transform 0.1s; margin-top: 10px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn-scan:active { transform: scale(0.97); }
+    .btn-scan.active { background: #dc2626; }
+
+    /* 即時掃碼視窗 */
+    #scanner-wrap { display: none; margin-top: 12px; border-radius: 12px; overflow: hidden; border: 2px solid #2563eb; background: #000; }
+    #reader { width: 100%; }
+
+    /* 解析中提示 */
+    .decode-status { display: none; margin-top: 10px; padding: 12px 14px; background: #eff6ff; border-radius: 10px; font-size: 0.9rem; color: #2563eb; text-align: center; }
+    .decode-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #bfdbfe; border-top-color: #2563eb; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 6px; }
+
+    .barcode-display { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+    .barcode-display input { flex: 1; }
+    .btn-clear { background: #f3f4f6; border: 2px solid #e5e7eb; border-radius: 10px; padding: 12px 14px; cursor: pointer; font-size: 1rem; color: #6b7280; flex-shrink: 0; }
+
+    #result-card { display: none; background: white; border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 6px rgba(0,0,0,0.08); border-left: 5px solid #2563eb; }
+    #result-card.error { border-left-color: #dc2626; }
+    .result-header { font-size: 0.85rem; font-weight: 600; color: #6b7280; margin-bottom: 12px; }
+    .result-item { display: flex; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid #f3f4f6; }
+    .result-item:last-child { border-bottom: none; }
+    .result-label { font-size: clamp(0.75rem, 3vw, 0.8rem); color: #6b7280; font-weight: 600; min-width: 80px; padding-top: 2px; }
+    .result-value { font-size: clamp(0.9rem, 3.5vw, 1rem); font-weight: 700; color: #1a202c; flex: 1; word-break: break-all; }
+    .result-value.location { color: #2563eb; }
+    .result-value.stock    { color: #059669; }
+    .error-msg { color: #dc2626; font-size: 0.95rem; font-weight: 500; }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📦 庫存查詢系統</h1>
+  <p>掃描條碼查詢商品資訊</p>
+</header>
+
+<div id="loading-overlay">
+  <div class="big-spinner"></div>
+  <span>資料載入中，請稍候…</span>
+</div>
+
+<main>
+  <div class="card">
+    <div class="card-title">🏪 選擇門市</div>
+    <label for="store-select">請選擇門市</label>
+    <div class="select-wrapper">
+      <select id="store-select"><option value="">載入中...</option></select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">📷 掃描 / 輸入條碼</div>
+
+    <button class="btn-scan" id="btn-scan" onclick="toggleScanner()">
+      <span style="font-size:1.3rem">📷</span>
+      <span id="scan-label">開啟掃碼器</span>
+    </button>
+
+    <div id="scanner-wrap"><div id="reader"></div></div>
+
+    <div class="decode-status" id="decode-status">
+      <span class="decode-spinner"></span>正在辨識條碼…
+    </div>
+
+    <div class="barcode-display">
+      <input type="text" id="barcode-input" placeholder="或直接輸入條碼號碼"
+             inputmode="numeric"
+             oninput="onBarcodeInput()"
+             onkeydown="if(event.key==='Enter') doSearch()" />
+      <button class="btn-clear" onclick="clearAll()">✕</button>
+    </div>
+  </div>
+
+  <div id="result-card">
+    <div class="result-header" id="result-header"></div>
+    <div id="result-content"></div>
+  </div>
+</main>
+
+<div id="dummy-div" style="display:none"></div>
+
+<script>
+  // ★ 填入你的 Apps Script 部署網址 ★
+  var SCRIPT_URL = 'https://script.google.com/a/macros/qekpro.com/s/AKfycbwHmlF6pbVCCc02bKwfpMUNcX_JT_WTFsy6r16oDMdXVIjhHFPEHPLIxVJLmwWA73RzCA/exec';
+
+  var DB        = null;
+  var qrScanner = null;
+  var scanning  = false;
+
+  // ── 載入資料（使用 fetch 取代 google.script.run）──────────
+  window.addEventListener('DOMContentLoaded', function () {
+    fetch(SCRIPT_URL + '?action=loadAllData')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        document.getElementById('loading-overlay').style.display = 'none';
+        if (!data.success) { showResult(false, data.error || '資料載入失敗'); return; }
+        DB = data;
+        var sel = document.getElementById('store-select');
+        sel.innerHTML = '<option value="">-- 請選擇門市 --</option>';
+        data.stores.forEach(function(s) {
+          var opt = document.createElement('option');
+          opt.value = s; opt.textContent = s; sel.appendChild(opt);
+        });
+      })
+      .catch(function(err) {
+        document.getElementById('loading-overlay').style.display = 'none';
+        showResult(false, '載入失敗，請確認網路連線：' + err.message);
+      });
+  });
+
+  // ── 掃碼器（即時串流，無 iframe 限制）────────────────────
+  function toggleScanner() {
+    scanning ? stopScanner() : startScanner();
+  }
+
+  function startScanner() {
+    document.getElementById('scanner-wrap').style.display = 'block';
+    document.getElementById('scan-label').textContent = '關閉掃碼器';
+    document.getElementById('btn-scan').classList.add('active');
+    scanning = true;
+
+    qrScanner = new Html5Qrcode('reader');
+    qrScanner.start(
+      { facingMode: 'environment' },
+      { fps: 15, qrbox: function(w, h) { var s = Math.min(w, h) * 0.7; return { width: s, height: Math.round(s * 0.5) }; } },
+      function(decoded) {
+        document.getElementById('barcode-input').value = decoded;
+        stopScanner();
+        doSearch();
+      },
+      function() {}
+    ).catch(function(err) {
+      // 串流失敗→改為拍照模式
+      stopScanner();
+      fallbackPhoto();
+    });
+  }
+
+  function stopScanner() {
+    if (qrScanner) { qrScanner.stop().catch(function(){}); qrScanner = null; }
+    document.getElementById('scanner-wrap').style.display = 'none';
+    document.getElementById('scan-label').textContent = '開啟掃碼器';
+    document.getElementById('btn-scan').classList.remove('active');
+    scanning = false;
+  }
+
+  // 相機串流失敗時自動切換拍照模式
+  function fallbackPhoto() {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+    inp.style.display = 'none';
+    inp.onchange = function() { handlePhotoFile(inp.files[0]); };
+    document.body.appendChild(inp);
+    inp.click();
+  }
+
+  function handlePhotoFile(file) {
+    if (!file) return;
+    document.getElementById('decode-status').style.display = 'block';
+    var qr = new Html5Qrcode('dummy-div', { verbose: false });
+    qr.scanFile(file, true)
+      .then(function(decoded) {
+        document.getElementById('decode-status').style.display = 'none';
+        document.getElementById('barcode-input').value = decoded;
+        doSearch();
+      })
+      .catch(function() {
+        document.getElementById('decode-status').style.display = 'none';
+        showResult(false, '條碼辨識失敗，請重新拍攝或手動輸入。');
+      });
+  }
+
+  // ── 手動輸入即時查詢 ───────────────────────────────────────
+  function onBarcodeInput() {
+    var b = document.getElementById('barcode-input').value.trim();
+    if (b.length >= 4) doSearch();
+    else document.getElementById('result-card').style.display = 'none';
+  }
+
+  // ── 本地查詢 ───────────────────────────────────────────────
+  function doSearch() {
+    if (!DB) { showResult(false, '資料尚未載入，請稍候'); return; }
+    var store   = document.getElementById('store-select').value;
+    var barcode = document.getElementById('barcode-input').value.trim();
+    if (!store)   { showResult(false, '請先選擇門市'); return; }
+    if (!barcode) { document.getElementById('result-card').style.display = 'none'; return; }
+
+    var list = DB.storeBarcodes[store] || [];
+    if (list.indexOf(barcode) === -1) {
+      showResult(false, '此條碼不在「' + store + '」的商品清單中'); return;
+    }
+
+    var p    = DB.products[barcode]      || { name: '（無資料）', style: '（無資料）', size: '（無資料）' };
+    var loc  = (DB.locations[barcode]    || {})[store] || '（無資料）';
+    var safe = (DB.safetyStocks[barcode] || {})[store] || '（無資料）';
+
+    displayProduct({ name: p.name, style: p.style, size: p.size, location: loc, safetyStock: safe }, barcode);
+    document.getElementById('barcode-input').value = '';
+  }
+
+  function clearAll() {
+    stopScanner();
+    document.getElementById('barcode-input').value = '';
+    document.getElementById('result-card').style.display = 'none';
+  }
+
+  function displayProduct(p, barcode) {
+    var card = document.getElementById('result-card');
+    card.className = ''; card.style.display = 'block';
+    document.getElementById('result-header').textContent = '✅ 查詢成功';
+    document.getElementById('result-content').innerHTML =
+      row('條碼',     escHtml(barcode), '') +
+      row('商品名稱', escHtml(p.name), '') +
+      row('樣式',     escHtml(p.style), '') +
+      row('尺寸',     escHtml(p.size), '') +
+      row('商品儲位', escHtml(p.location), 'location') +
+      row('安全庫存', escHtml(p.safetyStock), 'stock');
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function showResult(success, msg) {
+    var card = document.getElementById('result-card');
+    card.style.display = 'block'; card.className = success ? '' : 'error';
+    document.getElementById('result-header').textContent = success ? '✅ 成功' : '❌ 錯誤';
+    document.getElementById('result-content').innerHTML =
+      '<p class="' + (success ? '' : 'error-msg') + '">' + escHtml(msg) + '</p>';
+  }
+
+  function row(label, value, cls) {
+    return '<div class="result-item"><span class="result-label">' + label +
+           '</span><span class="result-value ' + cls + '">' + value + '</span></div>';
+  }
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>
